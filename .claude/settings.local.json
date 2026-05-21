@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(netsh wlan *)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('d:/code/ESP32_C3_WiFi_IO/full_test.py', doraise=True\\); print\\('OK'\\)\")",
+      "Bash(python d:/code/ESP32_C3_WiFi_IO/full_test.py --help)",
+      "Bash(ipconfig)",
+      "Bash(python -c ' *)",
+      "Bash(idf.py build *)",
+      "Read(//c/Espressif/dist/**)",
+      "Read(//c/Espressif/tools/**)",
+      "Bash(dir /s /b \"C:\\\\Espressif\\\\export*\")",
+      "Bash(dir /s /b \"C:\\\\Espressif\\\\*.bat\")",
+      "Bash(ls \"C:/Espressif/tools/idf-exe/\" 2>&1; ls \"C:/Espressif/tools/python/\" 2>&1; find \"C:/Espressif\" -name \"idf.py\" -type f 2>/dev/null | head -5)",
+      "Read(//c/Espressif/**)",
+      "Bash(\"C:/Espressif/tools/idf-exe/1.0.3/idf.exe\" --help)",
+      "Bash(\"C:/Espressif/tools/idf-exe/1.0.3/idf.py.exe\" build *)",
+      "Bash(find \"C:/Espressif\" -maxdepth 4 -type d -name \"esp-idf\" 2>/dev/null; find \"C:/Espressif\" -maxdepth 4 -type d -name \"frameworks\" 2>/dev/null; find \"C:/Users/Admin\" -maxdepth 3 -type d -name \"esp-idf*\" 2>/dev/null)",
+      "Read(//c/Users/Admin/**)",
+      "Bash(export IDF_PATH=\"D:/esp/esp_IDE/v5.3.5/esp-idf\")",
+      "Bash(export PATH=\"C:/Espressif/tools/python/v5.3.5/venv/Scripts:C:/Espressif/tools/cmake/3.30.2/bin:C:/Espressif/tools/ninja/1.12.1:C:$PATH\")",
+      "Bash(python __TRACKED_VAR__/tools/idf.py build)",
+      "Bash(powershell.exe -NoProfile -Command '$port = New-Object System.IO.Ports.SerialPort '\\\\''COM3'\\\\'',115200,'\\\\''None'\\\\'',8,'\\\\''One'\\\\''; $port.Open\\(\\); Start-Sleep -Milliseconds 500; $port.RtsEnable=$true; Start-Sleep -Milliseconds 200; $port.RtsEnable=$false; Start-Sleep -Seconds 2; $timeout=\\(Get-Date\\).AddSeconds\\(30\\); while\\(\\(Get-Date\\) -lt $timeout\\) { if\\($port.BytesToRead -gt 0\\) { Write-Host -NoNewline $port.ReadExisting\\(\\) } Start-Sleep -Milliseconds 200 }; $port.Close\\(\\)')"
+    ]
+  }
+}
