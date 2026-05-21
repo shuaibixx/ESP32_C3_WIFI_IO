@@ -11,7 +11,48 @@ PC 通过 WiFi TCP 协议控制 ESP32-C3 的 GPIO0 输出。
 - **配网**: AP 网页，支持固定 IP，一次配置永久记忆
 
 ---
-
+软件架构
+app_main()
+  │
+  ├─ nvs_flash_init()          ← NVS 初始化（WiFi 凭据存储）
+  ├─ io_init()                 ← GPIO0 配置为输入输出
+  │
+  ├─ wifi_init()               ← WiFi 初始化
+  │     │
+  │     ├─ 读 NVS 有无凭据
+  │     │     │
+  │     │     ├─ 有 → STA 连 WiFi（3 轮重试）
+  │     │     │     ├─ 成功 → 返回 0
+  │     │     │     └─ 失败 → 开 AP 配网
+  │     │     │
+  │     │     └─ 无 → 开 AP 配网
+  │     │           │
+  │     │           └─ 热点 XRay_Config → HTTP :80 配网页
+  │     │                   │
+  │     │                   用户浏览器 192.168.4.1
+  │     │                   填 SSID+密码+固定IP(可选)
+  │     │                   → 存 NVS → esp_restart()
+  │     │
+  │     └─ 连接成功 → g_wifi_state.connected = 1
+  │
+  └─ TCP Server 任务（端口 8080）
+        │
+        accept() 等 PC 连接
+          │
+          ├─ recv() 收数据（缓冲区 256 字节）
+          ├─ 滑动窗口逐帧解析（步长 1 字节）
+          │     │
+          │     └─ protocol_process() 每帧：
+          │           1. 长度 ≥ 4 字节
+          │           2. 帧头 = 0xF1（否则跳过）
+          │           3. XOR 校验 CMD ^ DATA
+          │           4. switch(cmd)
+          │              ├─ 0x01 → io_set_from_byte() → io_read_to_byte()
+          │              ├─ 0x02 → io_read_to_byte()（只读）
+          │              └─ 0x03 → nvs_erase("wifi") → esp_restart()
+          │           5. 组装响应帧（头 0xF2 + 回显 CMD + IO 状态 + 校验）
+          │
+          └─ send() 响应帧回 PC
 ## 2. 配网
 
 ```
@@ -159,3 +200,4 @@ print(f"状态={'高' if r[2]&1 else '低'}")
 
 s.close()
 ```
+
