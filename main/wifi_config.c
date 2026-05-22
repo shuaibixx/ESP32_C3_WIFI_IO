@@ -477,42 +477,62 @@ static void mdns_start(uint32_t ip)
  *  对外入口
  * ═══════════════════════════════════════════════════ */
 
+/**
+ * @brief  WiFi 初始化 — NVS 凭据加载 → STA 连接 → AP 配网回退
+ *
+ * ── 决策树 ──
+ *   1. NVS 有无凭据？
+ *       无 → 开 AP 热点 XRay_Config + HTTP 配网页（不返回）
+ *       有 → 继续
+ *   2. 用 NVS 凭据尝试 STA 连接（最多 AP_RETRY_COUNT 轮）
+ *       成功 → 返回 0，调用方启动 TCP Server
+ *       3 轮全失败 → 开 AP 热点（不返回）
+ *
+ * ── 返回值 ──
+ *   0  = STA 连接成功，g_wifi_state.connected=1, g_wifi_state.ip_str 有效
+ *   -1 = 启动 AP 配网（ap start_ap_mode 内部有死循环，实际不会到这里）
+ *
+ * ── 副作用 ──
+ *   调用 esp_netif_init() / esp_event_loop_create_default()（全局仅一次）
+ *   成功时 g_wifi_state 已填充
+ */
 int wifi_init(void)
 {
-    /* 0. 网络栈初始化（STA 和 AP 共用） */
-    esp_netif_init();
-    esp_event_loop_create_default();
+    /* ── 0: 网络栈初始化（TCP/IP + 事件循环，STA 和 AP 共用）── */
+    esp_netif_init();              /* 初始化 TCP/IP 协议栈 */
+    esp_event_loop_create_default(); /* 创建默认事件循环（WiFi 驱动回调用） */
 
-    /* 1. 尝试从 NVS 加载凭据 */
+    /* ── 1: 从 NVS 读取上次保存的 SSID/密码/IP ── */
     if (load_creds_from_nvs() != 0) {
-        /* 无凭据 → 直接开 AP */
         ESP_LOGI(TAG, "首次启动，进入 AP 配网模式");
-        start_ap_mode();
-        return -1;
+        start_ap_mode();           /* 开热点 XRay_Config + HTTP 配网页 → 内部死循环 */
+        return -1;                 /* 不可达（start_ap_mode 不返回） */
     }
 
-    /* 2. 有凭据，尝试 STA 连接（最多重试 AP_RETRY_COUNT 轮） */
-    esp_netif_create_default_wifi_sta();
+    /* ── 2: 有凭据 → 创建 STA netif → 循环尝试连接 ── */
+    esp_netif_create_default_wifi_sta();  /* 创建 STA 网络接口（仅一次） */
 
     for (int attempt = 1; attempt <= AP_RETRY_COUNT; attempt++) {
         ESP_LOGI(TAG, "连接尝试 %d/%d: %s", attempt, AP_RETRY_COUNT, g_ssid);
 
+        /* wifi_connect_sta: esp_wifi_init → set_mode(STA) → set_config → start → 等事件 */
         if (wifi_connect_sta(g_ssid, g_pwd) == 0) {
-            return 0;
+            return 0;              /* 连接成功，TCP Server 等 BLE 继续 */
         }
 
+        /* 本轮失败 → 停 WiFi、反初始化硬件 → 等 2 秒再试 */
         if (attempt < AP_RETRY_COUNT) {
-            esp_wifi_stop();
-            esp_wifi_deinit();
+            esp_wifi_stop();        /* 停止 WiFi 状态机 */
+            esp_wifi_deinit();      /* 释放 WiFi 驱动资源（下次 esp_wifi_init 才能成功） */
             vTaskDelay(pdMS_TO_TICKS(2000));
         }
     }
 
-    /* 3. 全部失败 → 进入 AP 配网模式 */
+    /* ── 3: AP_RETRY_COUNT 轮全失败 → 开 AP 配网 ── */
     ESP_LOGW(TAG, "STA 连接全部失败，进入 AP 配网模式");
-    start_ap_mode();
+    start_ap_mode();               /* 同步骤 1 */
 
-    /* 卡在这里直到配网成功重启 */
+    /* 保底死循环（start_ap_mode 内已有，这里双重保险） */
     while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
-    return -1;
+    return -1;                     /* 不可达 */
 }

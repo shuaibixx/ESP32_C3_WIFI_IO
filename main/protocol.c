@@ -1,12 +1,12 @@
 /**
  * @file    protocol.c
- * @brief   协议解析 + IO 控制实现
+ * @brief   协议解析 + IO 控制 — WiFi/BLE 双传输层共用
  *
- * 说明:
- *   - 仅控制 1 个 IO (GPIO0)，通过 DATA 字节的 bit0 设置
- *   - bit1~bit7 读取后忽略，仅作预留
- *   - 异或校验: CHECKSUM = CMD ^ DATA
- *   - 接收帧头 0xF1，发送帧头 0xF2
+ * ── 要点 ──
+ *   - 帧长固定 4 字节，XOR 校验
+ *   - WiFi 请求头 0xF1 → 响应头 0xF2
+ *   - BLE  请求头 0xE1 → 响应头 0xE2
+ *   - 同一帧格式解析逻辑，传输层间完全解耦
  */
 
 #include "protocol.h"
@@ -55,18 +55,24 @@ uint8_t io_read_to_byte(void)
  *  协议解析
  * ─────────────────────────────────────────────────── */
 
-int protocol_process(const uint8_t *rx_frame, int rx_len, uint8_t *tx_frame)
+int protocol_process(int transport, const uint8_t *rx_frame, int rx_len, uint8_t *tx_frame)
 {
     if (rx_len < FRAME_LEN)
         return 0;
 
-    if (rx_frame[0] != PROTO_HEADER_RX)
+    /* ── 传输层对应帧头：WiFi→F1/F2，BLE→E1/E2 ── */
+    uint8_t expected_rx = (transport == PROTO_WIFI) ? PROTO_HEADER_WIFI_RX : PROTO_HEADER_BLE_RX;
+    uint8_t response_hdr = (transport == PROTO_WIFI) ? PROTO_HEADER_WIFI_TX : PROTO_HEADER_BLE_TX;
+
+    /* 帧头校验：非本传输层帧头 → 跳过 */
+    if (rx_frame[0] != expected_rx)
         return 0;
 
     uint8_t cmd  = rx_frame[1];
     uint8_t data = rx_frame[2];
     uint8_t chk  = rx_frame[3];
 
+    /* XOR 校验 */
     uint8_t calc_chk = (uint8_t)(cmd ^ data);
     if (chk != calc_chk) {
         ESP_LOGW(TAG, "校验错误! 计算值=0x%02X, 接收值=0x%02X",
@@ -76,18 +82,19 @@ int protocol_process(const uint8_t *rx_frame, int rx_len, uint8_t *tx_frame)
 
     uint8_t resp_data = 0;
 
+    /* ── 命令分发 ── */
     switch (cmd) {
 
-    case CMD_SET_GPIO:
+    case CMD_SET_GPIO:                     /* 设置 IO 输出 */
         io_set_from_byte(data);
+        resp_data = io_read_to_byte();     /* 回读实际电平 */
+        break;
+
+    case CMD_READ_GPIO:                    /* 只读 IO 状态 */
         resp_data = io_read_to_byte();
         break;
 
-    case CMD_READ_GPIO:
-        resp_data = io_read_to_byte();
-        break;
-
-    case CMD_RESET_WIFI: {
+    case CMD_RESET_WIFI: {                /* 清除 WiFi 凭据 */
         nvs_handle_t handle;
         if (nvs_open("wifi", NVS_READWRITE, &handle) == ESP_OK) {
             nvs_erase_all(handle);
@@ -105,12 +112,14 @@ int protocol_process(const uint8_t *rx_frame, int rx_len, uint8_t *tx_frame)
         return 0;
     }
 
-    tx_frame[0] = PROTO_HEADER_TX;
-    tx_frame[1] = cmd;
-    tx_frame[2] = resp_data;
-    tx_frame[3] = (uint8_t)(cmd ^ resp_data);
+    /* ── 组装响应帧 ── */
+    tx_frame[0] = response_hdr;                     /* 传输层对应的响应帧头 */
+    tx_frame[1] = cmd;                              /* 回显命令 */
+    tx_frame[2] = resp_data;                        /* IO 当前状态 */
+    tx_frame[3] = (uint8_t)(cmd ^ resp_data);       /* 重算校验 */
 
-    ESP_LOGI(TAG, "响应: [%02X %02X %02X %02X]",
+    ESP_LOGI(TAG, "响应(%s): [%02X %02X %02X %02X]",
+             (transport == PROTO_WIFI) ? "WiFi" : "BLE",
              tx_frame[0], tx_frame[1], tx_frame[2], tx_frame[3]);
 
     return FRAME_LEN;

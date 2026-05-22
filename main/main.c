@@ -1,22 +1,29 @@
 /**
  * @file    main.c
- * @brief   ESP32-C3-MINI-1 WiFi IO 控制 — 主程序
+ * @brief   ESP32-C3-MINI-1 双模 IO 控制 — 主程序
  *
- * 功能概述:
- *   1. ESP32-C3 以 STA 模式连接路由器（首次通过 AP 网页配网）
- *   2. 启动 TCP Server 监听 8080 端口
- *   3. PC 通过网络发送 4 字节协议帧控制 GPIO0 的高低电平
+ * ── 启动流程 ──
+ *   1. NVS 初始化（WiFi 凭据存储）
+ *   2. IO 初始化（GPIO0 = 输入输出，默认低电平）
+ *   3. WiFi 初始化（NVS 有凭据 → STA 连接；无凭据/失败 → AP 网页配网）
+ *   4. BLE GATT 服务器启动（WiFi 无关，始终可用）
+ *   5. TCP Server 8080 启动（WiFi 就绪后）
  *
- * 硬件平台:
- *   - 芯片: ESP32-C3-MINI-1 (单核 RISC-V, 160MHz)
- *   - 受控 IO: GPIO0
- *   - 通信: WiFi STA + TCP Server
+ * ── 双模通信 ──
+ *   WiFi TCP :  PC ──TCP 8080──→ ESP32 ──protocol_process()──→ GPIO0
+ *   BLE GATT :  手机 ──BLE GATT──→ ESP32 ──protocol_process()──→ GPIO0
+ *   同一协议帧格式，两个传输通道共享同一个协议处理器
  *
- * 配网方式:
- *   首次开机或换网时，ESP32 自动创建热点 XRay_Config，
- *   浏览器打开 192.168.4.1 填写 WiFi 信息即可，配网后永久记忆。
+ * ── 硬件平台 ──
+ *   芯片: ESP32-C3-MINI-1 (单核 RISC-V 160MHz, 2MB Flash)
+ *   IO:   GPIO0 (MODE_INPUT_OUTPUT)
+ *   通信: WiFi STA 2.4GHz + BLE 5.0
  *
- * 协议说明详见 protocol.h
+ * ── 配网 ──
+ *   AP 网页: 首次开机开热点 XRay_Config → 浏览器 192.168.4.1
+ *   TCP 远程: 发送 F1 03 00 03 清除凭据并重启进配网
+ *
+ * 协议详见 protocol.h
  */
 
 #include <stdio.h>
@@ -29,6 +36,7 @@
 #include "lwip/sockets.h"          /* LWIP socket API (与 POSIX socket 兼容) */
 #include "wifi_config.h"           /* WiFi STA 连接 */
 #include "protocol.h"              /* 自定义协议 + IO 控制 */
+#include "ble_config.h"            /* BLE GATT 服务器 */
 
 static const char *TAG = "main";
 
@@ -61,24 +69,23 @@ void app_main(void)
     /* ── 第 3 步: 连接 WiFi（自动 NVS 读取 / AP 配网回退） ── */
     int wifi_ret = wifi_init();
 
-    /* ── 第 4 步: WiFi 就绪后启动 TCP Server ── */
+    /* ── 第 4 步: 启动 BLE（WiFi 无关，始终可用） ── */
+    ble_init();
+
+    /* ── 第 5 步: WiFi 就绪后启动 TCP Server ── */
     if (wifi_ret == 0 && g_wifi_state.connected) {
         ESP_LOGI(TAG, "========================================");
-        ESP_LOGI(TAG, "  TCP Server 已就绪");
+        ESP_LOGI(TAG, "  TCP Server1 已就绪");
         ESP_LOGI(TAG, "  端口: %d", TCP_PORT);
         ESP_LOGI(TAG, "  IP  : %s", g_wifi_state.ip_str);
         ESP_LOGI(TAG, "  等待 PC 连接...");
         ESP_LOGI(TAG, "========================================");
 
-        /* 创建 TCP 服务器任务 (FreeRTOS 任务) */
-        xTaskCreate(tcp_server_task,   /* 任务函数 */
-                    "tcp_server",      /* 任务名称 (调试用) */
-                    TCP_SERVER_STACK,  /* 任务堆栈大小 (字节) */
-                    NULL,              /* 传入参数 */
-                    TCP_SERVER_PRIO,   /* 任务优先级 */
-                    NULL);             /* 任务句柄 (不需要) */
+        /* 创建 TCP 服务器任务 */
+        xTaskCreate(tcp_server_task, "tcp_server",
+                    TCP_SERVER_STACK, NULL, TCP_SERVER_PRIO, NULL);
     } else {
-        ESP_LOGE(TAG, "WiFi 未连接，系统停止");
+        ESP_LOGW(TAG, "WiFi 未连接，仅 BLE 可用");
     }
 }
 
@@ -177,7 +184,7 @@ static void tcp_server_task(void *arg)
              *   滑动窗口依次处理每一帧。
              */
             for (int i = 0; i <= len - FRAME_LEN; i++) {
-                int resp_len = protocol_process(&rx_buf[i], FRAME_LEN, tx_buf);
+                int resp_len = protocol_process(PROTO_WIFI, &rx_buf[i], FRAME_LEN, tx_buf);
 
                 if (resp_len > 0) {
                     /* 协议解析成功 → 发送响应帧给 PC */

@@ -1,17 +1,35 @@
-# ESP32-C3 WiFi IO 通信协议
+# ESP32-C3 WiFi + BLE IO 通信协议
 
 ## 1. 概要
 
-PC 通过 WiFi TCP 协议控制 ESP32-C3 的 GPIO0 输出。
+ESP32-C3 提供 **WiFi TCP** 和 **BLE GATT** 两条通道，共用同一个 4 字节协议帧控制 GPIO0。
 
-- **传输**: TCP 8080
+```
+         WiFi TCP 8080                    BLE GATT
+  PC ──────────────────→ ESP32 ←─── 手机/nRF Connect
+              │                  │
+              └── protocol_process() ──→ GPIO0
+```
+
+- **传输**: TCP 8080 (帧头 F1/F2) + BLE GATT (帧头 E1/E2)
 - **帧长**: 固定 4 字节
 - **校验**: CMD XOR DATA
 - **引脚**: GPIO0
 - **配网**: AP 网页，支持固定 IP，一次配置永久记忆
 
+### 双模架构
+
+```
+app_main()
+  ├─ nvs_flash_init()
+  ├─ io_init()
+  ├─ wifi_init()          ← STA 连接 / AP 配网回退
+  ├─ ble_init()           ← BLE 独立启动（WiFi 无关）
+  └─ TCP Server 8080      ← WiFi 就绪后启动
+```
+
 ---
-软件架构
+### wifi软件架构
 app_main()
   │
   ├─ nvs_flash_init()          ← NVS 初始化（WiFi 凭据存储）
@@ -53,6 +71,42 @@ app_main()
           │           5. 组装响应帧（头 0xF2 + 回显 CMD + IO 状态 + 校验）
           │
           └─ send() 响应帧回 PC
+
+---
+### 蓝牙软件架构
+上电 → ble_init()
+         │
+         ├─ 回调设置 (reset_cb + sync_cb)
+         ├─ nimble_port_init()       ← NimBLE 栈初始化
+         ├─ GAP + GATT 服务注册
+         ├─ 设备名 "XRay_BLE"
+         └─ nimble 主机任务启动
+               │
+               └─ nimble_port_run()  ← 死循环处理协议栈事件
+                     │
+                     ├─ ble_on_sync() 触发
+                     │     └─ 启动广播 ──────────────────┐
+                     │                                    │
+      ┌──────────────┘                                    │
+      │         客户端搜索 → 发现 "XRay_BLE"                │
+      │         客户端点连接                                │
+      │              │                                    │
+      │    BLE_GAP_EVENT_CONNECT                           │  客户端
+      │    "客户端已连接"                                    │  写 RX 特征
+      │              │                                    │  F1 01 01 00
+      │    ←── rx_char_access() 接收 4 字节 ──────────────┘
+      │              │
+      │    protocol_process() 解析帧 → 控制 GPIO0
+      │    生成响应 tx_buf = F2 01 01 00
+      │              │
+      │    ble_gatts_notify_custom() 推送响应 ──→ 客户端 TX 通知
+      │              │
+      │    BLE_GAP_EVENT_DISCONNECT
+      │    "客户端断开"
+      │              │
+      │    └── 恢复广播 ──────────────→ 等待下一个客户端
+
+
 ## 2. 配网
 
 ```
@@ -81,12 +135,12 @@ app_main()
 └──────────┴──────────┴──────────┴──────────┘
 ```
 
-### HEADER (Byte 0)
+### HEADER (Byte 0) — 传输层区分
 
-| 方向 | 值 |
-|------|-----|
-| PC → ESP32 | `0xF1` |
-| ESP32 → PC | `0xF2` |
+| 传输层 | 请求 (客户端→ESP32) | 响应 (ESP32→客户端) |
+|--------|--------------------|-------------------|
+| WiFi TCP | `0xF1` | `0xF2` |
+| BLE GATT | `0xE1` | `0xE2` |
 
 ### CMD (Byte 1)
 
@@ -160,10 +214,32 @@ bit0 = GPIO 电平 (0 低 / 1 高)，bit1~7 保留。
 
 ---
 
-## 7. 测试
+## 7. BLE 使用
+
+ESP32 广播 `XRay_BLE`，GATT Service 含两个特征：
+
+| 特征 | UUID 末位 | 属性 | 说明 |
+|------|----------|------|------|
+| RX | ...0E10 | Write | 写入 4 字节协议帧（帧头 E1） |
+| TX | ...0E11 | Notify | 推送 4 字节响应帧（帧头 E2） |
+
+**BLE 专用帧头**: 请求 `0xE1`，响应 `0xE2`
+
+**操作步骤**（nRF Connect）：
+1. 搜索 `XRay_BLE` → Connect
+2. 订阅 TX 特征以接收响应通知
+3. 向 RX 特征写入协议帧（如 `E1010100` 置高）
+4. TX 通知弹出响应（如 `E2010100`）
+
+**Python 测试**：
+```bash
+python ble_test.py    # 需要 PC 有蓝牙适配器
+```
+
+## 8. TCP 测试
 
 ```bash
-python -c "import socket; s=socket.socket(); s.connect(('192.168.0.200',8080)); s.sendall(bytes([0xF1,0x03,0x00,0x03])); s.close()"               # NVS 并重启进 AP 配网模式
+python -c "import socket; s=socket.socket(); s.connect(('192.168.0.200',8080)); s.sendall(bytes([0xF1,0x03,0x00,0x03])); s.close()"               # 清除 WiFi 凭据并重启进 AP 配网
 python pc_test.py 192.168.0.200        # 交互测试 (1/0/r/q)
 python full_test.py 192.168.0.200      # 12 项全自动回归
 python full_test.py 192.168.0.200 --loop  # 持续压测
@@ -172,7 +248,7 @@ python simulate_test.py                # 本地模拟（无需硬件）
 
 ---
 
-## 8. PC 端参考代码
+## 9. PC 端参考代码
 
 ```python
 import socket
@@ -199,5 +275,24 @@ r = s.recv(4)
 print(f"状态={'高' if r[2]&1 else '低'}")
 
 s.close()
+```
+
+### BLE 端（Python bleak，帧头 0xE1）
+```python
+import asyncio
+from bleak import BleakClient
+
+RX_UUID = "100e0d0c-0b0a-0908-0706-050403020100"
+TX_UUID = "110e0d0c-0b0a-0908-0706-050403020100"
+
+async def main():
+    async with BleakClient("XRay_BLE") as client:
+        def on_notify(sender, data):
+            print(f"响应(E2): {' '.join(f'{b:02X}' for b in data)}")
+
+        await client.start_notify(TX_UUID, on_notify)
+        await client.write_gatt_char(RX_UUID, bytes([0xE1,0x01,0x01,0x00]))
+
+asyncio.run(main())
 ```
 
