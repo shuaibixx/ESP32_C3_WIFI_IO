@@ -36,6 +36,7 @@
 #define NVS_KEY_IP      "ip4"       /* IP 末位, -1 = 用 DHCP */
 
 /* ── 重试参数 ── */
+#define FW_VERSION      "1.0.0"  /* 固件版本，开机包上报 */
 #define WIFI_RETRY_MAX  10
 #define AP_RETRY_COUNT   3           /* STA 连不上重试 3 次就开 AP */
 
@@ -55,5 +56,12 @@ extern wifi_state_t g_wifi_state;
  *          （AP 模式下不会返回，配网成功后调用 esp_restart）
  */
 int wifi_init(void);
+
+/**
+ * @brief   发送开机包 (CMD_BOOT_INFO)
+ *          内容: 固件版本,设备MAC,IP地址 (逗号分隔)
+ * @param   sock : TCP 客户端 socket
+ */
+void send_boot_packet(int sock);
 
 #endif /* __WIFI_CONFIG_H__ */

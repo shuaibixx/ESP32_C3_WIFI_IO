@@ -16,8 +16,9 @@ import time
 # ========== Protocol constants ==========
 PROTO_HEADER_RX = 0xF1   # receive frame header (PC→ESP32)
 PROTO_HEADER_TX = 0xF2   # transmit frame header (ESP32→PC)
-CMD_SET_GPIO = 0x01
+CMD_SET_GPIO  = 0x01
 CMD_READ_GPIO = 0x02
+CMD_BOOT_INFO = 0x10
 FRAME_LEN = 4
 
 
@@ -58,6 +59,17 @@ class FakeESP32:
         return bytes([PROTO_HEADER_TX, cmd, resp_data,
                       self.calc_checksum(cmd, resp_data)])
 
+    def build_boot_packet(self):
+        """Build CMD_BOOT_INFO frame: F2 10 <LEN> <PAYLOAD> <CHK>"""
+        payload = "1.0.0,AA:BB:CC:DD:EE:FF,192.168.0.200,A4:2B:B0:DC:12:34,-65"
+        plen = len(payload)
+        chk = 0
+        for b in payload.encode():
+            chk ^= b
+        frame = bytes([PROTO_HEADER_TX, CMD_BOOT_INFO, plen]) + \
+                payload.encode() + bytes([chk])
+        return frame
+
     def start(self):
         """Start TCP Server"""
         self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -69,6 +81,11 @@ class FakeESP32:
         while True:
             client, addr = self.server_sock.accept()
             print(f"[ESP32] Client connected: {addr}")
+
+            # Send boot packet on connect
+            boot = self.build_boot_packet()
+            client.sendall(boot)
+            print(f"[ESP32] Boot packet sent: {boot.hex(' ').upper()}")
 
             while True:
                 data = client.recv(256)
@@ -147,11 +164,56 @@ class FakePC:
             print(f"  [PASS] GPIO0 = {'HIGH' if level else 'LOW'}")
             self.pass_count += 1
 
+    def parse_boot_packet(self, data):
+        """Parse CMD_BOOT_INFO frame, return dict or None on error"""
+        if len(data) < 4:
+            return None
+        if data[0] != PROTO_HEADER_TX or data[1] != CMD_BOOT_INFO:
+            return None
+        plen = data[2]
+        if len(data) < 3 + plen + 1:
+            return None
+        payload = data[3:3 + plen].decode('ascii')
+        chk = data[3 + plen]
+        calc = 0
+        for b in payload.encode():
+            calc ^= b
+        if chk != calc:
+            return None
+        parts = payload.split(',')
+        if len(parts) != 5:
+            return None
+        return {'version': parts[0], 'mac': parts[1], 'ip': parts[2],
+                'bssid': parts[3], 'rssi': int(parts[4])}
+
     def run_all_tests(self):
         """Run all test cases"""
         print("=" * 50)
         print("  Protocol Test Suite")
         print("=" * 50)
+
+        # Test 0: Boot packet
+        print("\n[Test 0] Verify boot packet")
+        boot_raw = self.sock.recv(256)
+        print(f"[PC] Recv: {boot_raw.hex(' ').upper()}")
+        boot = self.parse_boot_packet(boot_raw)
+        if boot is None:
+            print(f"  [FAIL] Boot packet parse failed")
+            self.fail_count += 1
+        else:
+            ok = all([
+                boot['version'] == '1.0.0',
+                boot['mac'] == 'AA:BB:CC:DD:EE:FF',
+                boot['ip'] == '192.168.0.200',
+                boot['bssid'] == 'A4:2B:B0:DC:12:34',
+                boot['rssi'] == -65,
+            ])
+            if ok:
+                print(f"  [PASS] Boot={boot}")
+                self.pass_count += 1
+            else:
+                print(f"  [FAIL] Boot content mismatch: {boot}")
+                self.fail_count += 1
 
         # Test 1: Set GPIO HIGH
         print("\n[Test 1] Set GPIO0 HIGH")

@@ -149,14 +149,19 @@ app_main()
 | `0x01` | CMD_SET_GPIO | 写 GPIO 电平 |
 | `0x02` | CMD_READ_GPIO | 读 GPIO 电平（只读不写）|
 | `0x03` | CMD_RESET_WIFI | 清除 WiFi 凭据并重启 |
+| `0x10` | CMD_BOOT_INFO | 开机包 — ESP32→PC 推送（变长帧）|
 
 ### DATA (Byte 2)
 
 bit0 = GPIO 电平 (0 低 / 1 高)，bit1~7 保留。
 
+> **CMD_BOOT_INFO (0x10) 特殊说明**: 该命令使用变长帧格式，帧长 > 4 字节，规则见第 4 节。
+
 ### CHECKSUM (Byte 3)
 
 `CHECKSUM = CMD ^ DATA`
+
+> **CMD_BOOT_INFO 的 CHECKSUM**: PAYLOAD 逐字节 XOR 得出 1 字节，见第 4 节。
 
 ---
 
@@ -188,12 +193,57 @@ bit0 = GPIO 电平 (0 低 / 1 高)，bit1~7 保留。
 
 清除 NVS 中 WiFi 凭据 → 重启 → 进 AP 配网模式。
 
+### CMD_BOOT_INFO (0x10) — 开机包
+
+TCP 客户端连上后，ESP32 主动推送，一帧包含固件版本、设备 MAC、IP 地址。
+
+**帧格式**（变长）：
+
+```
+┌────────┬────────┬────────┬───────────────────┬──────────┐
+│ 0xF2   │  0x10  │ LENGTH │     PAYLOAD       │ CHECKSUM │
+│ 帧头   │ 命令   │  1 字节 │  ASCII 逗号分隔    │  1 字节  │
+└────────┴────────┴────────┴───────────────────┴──────────┘
+```
+
+**校验**: PAYLOAD 所有字节逐次 XOR（逗号参与）。
+
+**PAYLOAD 格式**: `固件版本,MAC地址,IP地址,BSSID,RSSI`
+
+**示例**:
+
+> `1.0.0,AA:BB:CC:DD:EE:FF,192.168.0.200,A4:2B:B0:DC:12:34,-65`
+> `─┬── ─────────┬───────── ─────┬────── ───────┬─────── ─┬─`
+>  固件版本     设备MAC          IP地址         路由器MAC   信号强度(dBm)
+
+| 方向 | 帧 (HEX) | 含义 |
+|------|------|------|
+| ESP32→PC | `F2 10 3D 31 2E ... 2D 36 35 4F` | 开机包 |
+
+PC 端解析示例:
+```python
+def parse_boot(frame):
+    # frame[0]=F2, frame[1]=10, frame[2]=len
+    plen = frame[2]
+    payload = frame[3:3+plen].decode('ascii')
+    chk = frame[3+plen]
+    # 校验
+    calc = 0
+    for b in payload.encode():
+        calc ^= b
+    if calc != chk:
+        return None
+    ver, mac, ip, bssid, rssi = payload.split(',')
+    return {'version': ver, 'mac': mac, 'ip': ip, 'bssid': bssid, 'rssi': int(rssi)}
+```
+
 ---
 
 ## 5. 示例
 
 | 步骤 | 方向 | 帧 | 含义 |
 |------|------|-----|------|
+| – | ESP32→PC | `F2 10 35 ...` | 开机包（自动推送）|
 | 1 | PC→ESP32 | `F1 01 01 00` | 置高 |
 | 2 | ESP32→PC | `F2 01 01 00` | 确认置高 |
 | 3 | PC→ESP32 | `F1 02 00 02` | 读取 |
@@ -239,11 +289,11 @@ python ble_test.py    # 需要 PC 有蓝牙适配器
 ## 8. TCP 测试
 
 ```bash
-python -c "import socket; s=socket.socket(); s.connect(('192.168.0.200',8080)); s.sendall(bytes([0xF1,0x03,0x00,0x03])); s.close()"               # 清除 WiFi 凭据并重启进 AP 配网
-python pc_test.py 192.168.0.200        # 交互测试 (1/0/r/q)
-python full_test.py 192.168.0.200      # 12 项全自动回归
+python -c "import socket; s=socket.socket(); s.connect(('192.168.0.200',8080)); s.sendall(bytes([0xF1,0x03,0x00,0x03])); s.close()"                                         # 清除 WiFi 凭据并重启进 AP 配网
+python pc_test.py 192.168.0.200           # 交互测试 (1/0/r/q)
+python full_test.py 192.168.0.200         # 12 项全自动回归
 python full_test.py 192.168.0.200 --loop  # 持续压测
-python simulate_test.py                # 本地模拟（无需硬件）
+python simulate_test.py                   # 本地模拟（无需硬件）
 ```
 
 ---

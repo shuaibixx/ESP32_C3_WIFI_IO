@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "wifi_config.h"
+#include "protocol.h"
 #include "lwip/sockets.h"
 #include "esp_mac.h"
 
@@ -471,6 +472,53 @@ static void mdns_start(uint32_t ip)
 {
     g_local_ip = ip;
     xTaskCreate(mdns_task, "mdns", 2560, NULL, tskIDLE_PRIORITY + 1, NULL);
+}
+
+/* ═══════════════════════════════════════════════════
+ *  开机包 (ESP32 → PC)
+ *  格式: F2 10 <LEN> <PAYLOAD> <CHK>
+ *  PAYLOAD: "固件版本,MAC地址,IP地址,BSSID,RSSI"
+ *  CHK: PAYLOAD 逐字节 XOR
+ * ═══════════════════════════════════════════════════ */
+
+void send_boot_packet(int sock)
+{
+    uint8_t mac[6];
+    wifi_ap_record_t ap_info;
+    char payload[BOOT_INFO_MAX];
+    uint8_t frame[BOOT_INFO_MAX + 4];
+
+    esp_efuse_mac_get_default(mac);
+    esp_wifi_sta_get_ap_info(&ap_info);
+
+    snprintf(payload, sizeof(payload),
+             "%s,%02X:%02X:%02X:%02X:%02X:%02X,%s,%02X:%02X:%02X:%02X:%02X:%02X,%d",
+             FW_VERSION,
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+             g_wifi_state.ip_str,
+             ap_info.bssid[0], ap_info.bssid[1], ap_info.bssid[2],
+             ap_info.bssid[3], ap_info.bssid[4], ap_info.bssid[5],
+             ap_info.rssi);
+
+    int plen = (int)strlen(payload);
+
+    uint8_t chk = 0;
+    for (int i = 0; i < plen; i++) chk ^= (uint8_t)payload[i];
+
+    frame[0] = PROTO_HEADER_WIFI_TX;   /* 0xF2 */
+    frame[1] = CMD_BOOT_INFO;           /* 0x10 */
+    frame[2] = (uint8_t)plen;           /* PAYLOAD 长度 */
+    memcpy(frame + 3, payload, plen);
+    frame[3 + plen] = chk;
+
+    int total = 3 + plen + 1;
+    int sent = send(sock, frame, total, 0);
+
+    if (sent > 0) {
+        ESP_LOGI(TAG, "开机包已发送: %s", payload);
+    } else {
+        ESP_LOGW(TAG, "发送开机包失败");
+    }
 }
 
 /* ═══════════════════════════════════════════════════

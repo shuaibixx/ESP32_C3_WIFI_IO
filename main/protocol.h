@@ -58,7 +58,8 @@
 #define CMD_SET_GPIO    0x01    /* 设置 GPIO 输出 */
 #define CMD_READ_GPIO   0x02    /* 读取 GPIO 状态（只读不写） */
 #define CMD_RESET_WIFI  0x03    /* 清除 WiFi 凭据并重启 */
-
+#define CMD_BOOT_INFO   0x10    /* 开机包：固件版本+设备号+IP (ESP32→PC) */
+#define BOOT_INFO_MAX   128     /* 开机包 PAYLOAD 最大字节数 */
 /* ── IO 控制引脚 ── */
 #define IO_PIN          GPIO_NUM_0
 #define IO_DATA_MASK    0x01
@@ -69,6 +70,7 @@
 void io_init(void);
 void io_set_from_byte(uint8_t data);
 uint8_t io_read_to_byte(void);
+void pwm_init(void);
 
 /**
  * @brief   处理一帧协议数据（传输层无关）

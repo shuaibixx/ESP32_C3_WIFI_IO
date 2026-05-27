@@ -1,0 +1,46 @@
+帧头,传输层,方向,说明
+0xF1,WiFi TCP,客户端 → ESP32,请求帧
+0xF2,WiFi TCP,ESP32 → 客户端,响应帧
+0xE1,BLE GATT,客户端 → ESP32,请求帧
+0xE2,BLE GATT,ESP32 → 客户端,响应帧
+
+命令码,宏名,帧长,说明
+0x01,CMD_SET_GPIO,4 字节,设置 GPIO0 电平 (DATA.bit0=1高/0低)
+0x02,CMD_READ_GPIO,4 字节,读取 GPIO0 当前电平 (只读不写)
+0x03,CMD_RESET_WIFI,4 字节,清除 NVS WiFi 凭据并重启
+0x10,CMD_BOOT_INFO,变长 (5~131),开机包 — 推送固件版本+设备号+IP+BSSID+RSSI
+
+字段,位宽,说明
+HEADER,1 字节 (Byte 0),帧头 — WiFi F1/F2  BLE E1/E2
+CMD,1 字节 (Byte 1),命令码 — 0x01~0x03定长  0x10变长
+DATA/LENGTH,1 字节 (Byte 2),定长帧=数据(bit0=GPIO电平)  变长帧=PAYLOAD字节数
+CHECKSUM,1 字节 (Byte 3或帧尾),定长帧=CMD^DATA  变长帧=PAYLOAD逐字节XOR
+
+命令,请求示例,响应示例,说明
+CMD_SET_GPIO 置高,F1 01 01 00,F2 01 01 00,GPIO0=高电平
+CMD_SET_GPIO 置低,F1 01 00 01,F2 01 00 01,GPIO0=低电平
+CMD_READ_GPIO,F1 02 00 02,F2 02 01 03,回读状态=高
+CMD_RESET_WIFI,F1 03 00 03,无响应,清除凭据后重启进AP配网
+CMD_BOOT_INFO,ESP32自动推送,F2 10 3D 31 2E ... 2D 36 35 XX,"PAYLOAD=1.0.0,AA:BB:CC:DD:EE:FF,192.168.0.200,A4:2B:B0:DC:12:34,-65"
+
+开机包PAYLOAD,来源,获取方式,示例
+固件版本,#define FW_VERSION,编译期硬编码,1.0.0
+逗号,硬编码,,,
+设备MAC,esp_efuse_mac_get_default(),读eFuse,AA:BB:CC:DD:EE:FF
+逗号,硬编码,,,
+IP地址,g_wifi_state.ip_str,WiFi连接后赋值,192.168.0.200
+逗号,硬编码,,,
+BSSID,esp_wifi_sta_get_ap_info().bssid,获取所连AP的MAC,A4:2B:B0:DC:12:34
+逗号,硬编码,,,
+RSSI,esp_wifi_sta_get_ap_info().rssi,获取所连AP的信号强度(dBm),-65
+校验(帧尾),PAYLOAD逐字节XOR,,接收方重算比对
+
+错误类型,ESP32行为
+帧长 < 4 字节(定长帧),丢弃 等待更多数据
+帧头不匹配,滑动窗口跳过
+XOR校验不匹配,丢弃并打印日志
+未知命令码,丢弃并打印日志
+
+传输通道,物理层,端口/UUID,帧头
+WiFi TCP,2.4GHz WiFi,8080,F1/F2
+BLE GATT,2.4GHz BLE 5.0,RX:..0E10 TX:..0E11,E1/E2

@@ -75,7 +75,7 @@ void app_main(void)
     /* ── 第 5 步: WiFi 就绪后启动 TCP Server ── */
     if (wifi_ret == 0 && g_wifi_state.connected) {
         ESP_LOGI(TAG, "========================================");
-        ESP_LOGI(TAG, "  TCP Server1 已就绪");
+        ESP_LOGI(TAG, "  TCP Server 已就绪");
         ESP_LOGI(TAG, "  端口: %d", TCP_PORT);
         ESP_LOGI(TAG, "  IP  : %s", g_wifi_state.ip_str);
         ESP_LOGI(TAG, "  等待 PC 连接...");
@@ -158,6 +158,9 @@ static void tcp_server_task(void *arg)
         ESP_LOGI(TAG, "可以发送协议帧控制 GPIO%d 了", IO_PIN);
         ESP_LOGI(TAG, "示例: F1 01 01 00 → GPIO%d=高电平", IO_PIN);
         ESP_LOGI(TAG, "示例: F1 01 00 01 → GPIO%d=低电平", IO_PIN);
+
+        /* ── 开机包: 推送固件版本+设备号+IP 到 PC ── */
+        send_boot_packet(client_sock);
 
         /* ── 客户端连接后的收发循环 ── */
         while (1) {
