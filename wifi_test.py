@@ -347,22 +347,51 @@ def mode_stress(ip):
 # ============================================================
 #  入口
 # ============================================================
+MENU = """
+{G}╔══════════════════════════════════╗{X}
+{G}║   ESP32-C3 WiFi IO 测试工具     ║{X}
+{G}╚══════════════════════════════════╝{X}
+
+  1. sim       本地模拟测试 (无需硬件)
+  2. boot      仅测开机包
+  3. run       交互式 IO 控制
+  4. full      全自动 12 项测试
+  5. stress    循环压测
+
+  0. 退出
+"""
+
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print(__doc__)
-        sys.exit(0)
-
-    mode, *args = sys.argv[1:]
-
-    if mode == 'sim':
-        mode_sim()
-    elif mode == 'boot' and args:
-        mode_boot(args[0])
-    elif mode == 'run' and args:
-        mode_run(args[0])
-    elif mode == 'full' and args:
-        mode_full(args[0])
-    elif mode == 'stress' and args:
-        mode_stress(args[0])
+    if len(sys.argv) >= 2:
+        # 命令行模式
+        mode, *args = sys.argv[1:]
+        if mode == 'sim':     mode_sim()
+        elif mode == 'boot' and args:   mode_boot(args[0])
+        elif mode == 'run' and args:    mode_run(args[0])
+        elif mode == 'full' and args:   mode_full(args[0])
+        elif mode == 'stress' and args: mode_stress(args[0])
+        else: print(__doc__)
     else:
-        print(__doc__)
+        # 交互菜单模式
+        while True:
+            print(MENU.format(G=GREEN, X=RST))
+            choice = input("  选择 [1-5/0]: ").strip()
+            if choice == '1': mode_sim()
+            elif choice == '2':
+                ip = input("  ESP32 IP: ").strip()
+                if ip: mode_boot(ip)
+            elif choice == '3':
+                ip = input("  ESP32 IP: ").strip()
+                if ip: mode_run(ip)
+            elif choice == '4':
+                ip = input("  ESP32 IP: ").strip()
+                if ip: mode_full(ip)
+            elif choice == '5':
+                ip = input("  ESP32 IP: ").strip()
+                if ip: mode_stress(ip)
+            elif choice == '0':
+                print("  退出")
+                break
+            else:
+                print(f"  无效选择: {choice}")
+            input(f"\n  按回车继续...")
